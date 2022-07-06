@@ -4,18 +4,19 @@ const Allocator = std.mem.Allocator;
 const native_endian = @import("builtin").target.cpu.arch.endian();
 const print = std.debug.print;
 const magicNumbers = @import("magicNumbers.zig");
+const utils = @import("utils.zig");
 const test_allocator = std.testing.allocator;
 
 const PngDecoder = @This();
 const PngDecoderErr = error{ ChunkCrcErr, ChunkHeaderSigErr, ChunkOrderErr };
-const ParserChunkState = enum {
+pub const ParserChunkState = enum {
     ParsingPngSig,
     ParsingHeaderChunk,
     ParsingZlsStreamChunk,
     ParsingEndingChunk,
 };
 
-const ParserInChunkState = enum { ParsingLen, ParsingType, ParsingData, ParsingCrc };
+pub const ParserInChunkState = enum { ParsingLen, ParsingType, ParsingData, ParsingCrc };
 
 const DecodedImg = struct {
     width: u32,
@@ -26,18 +27,18 @@ pub const PngChunk = struct {
     len: u32, // only defines the len of the data field!
     chunkType: magicNumbers.ChunkType,
     data: []u8,
-    data_appended_size: usize,
     crc: u32,
 };
 
 a: Allocator,
-buff: [4]u8,
+buff: [1]u8,
 parser_state: ParserChunkState,
 parser_chunk_state: ParserInChunkState,
 parser_chunk: PngChunk,
+parser_gp_buff: [4]u8,
 
 parser_png_sig: [8]u8,
-parser_png_sig_appended_size: usize,
+parser_parsed_bytes: u32,
 
 img: DecodedImg,
 
@@ -46,15 +47,16 @@ pub fn init(a: Allocator) PngDecoder {
         .a = a,
         .buff = undefined,
         .parser_chunk_state = ParserInChunkState.ParsingLen,
-        .parser_state = ParserChunkState.ParsingHeaderChunk,
+        .parser_state = ParserChunkState.ParsingPngSig,
         .img = undefined,
         .parser_png_sig = undefined,
-        .parser_png_sig_appended_size = 0,
-        .parser_chunk = undefined,
+        .parser_gp_buff = undefined,
+        .parser_parsed_bytes = 0,
+        .parser_chunk = .{ .len = 0, .chunkType = undefined, .data = undefined, .crc = 0 },
     };
 }
 
-pub fn parse(self: *PngDecoder, buff: [4]u8) !void {
+pub fn parse(self: *PngDecoder, buff: [1]u8) !void {
     self.buff = buff;
     switch (self.parser_state) {
         .ParsingPngSig => {
@@ -63,9 +65,10 @@ pub fn parse(self: *PngDecoder, buff: [4]u8) !void {
         },
         .ParsingHeaderChunk => {
             if (try self.parseChunk()) {
-                if (self.parser_chunk.chunkType == magicNumbers.ChunkType.ihdr) {
+                if (self.parser_chunk.chunkType != magicNumbers.ChunkType.ihdr) {
                     return PngDecoderErr.ChunkOrderErr;
                 }
+                print("chunk type: {}, len: {d}, crc: {d} data:{d} \n", .{ self.parser_chunk.chunkType, self.parser_chunk.len, self.parser_chunk.crc, self.parser_chunk.data });
                 // self.img.width = self.parser_chunk.data = [];
 
                 self.a.free(self.parser_chunk.data);
@@ -73,67 +76,90 @@ pub fn parse(self: *PngDecoder, buff: [4]u8) !void {
             }
         },
         .ParsingZlsStreamChunk => {
-            if (try self.parseChunk())
-                self.parser_state = ParserChunkState.ParsingZlsStreamChunk;
+            return;
+            // if (try self.parseChunk())
+            //     self.parser_state = ParserChunkState.ParsingZlsStreamChunk;
         },
-        .ParsingEndingChunk => undefined,
+        .ParsingEndingChunk => {
+            return;
+        },
     }
 }
 
 fn parseChunk(self: *PngDecoder) !bool {
     switch (self.parser_chunk_state) {
         ParserInChunkState.ParsingLen => {
-            self.parser_chunk.len = @bitCast(u32, self.buff);
-            if (native_endian == .Little) {
-                self.parser_chunk.len = @byteSwap(u32, self.parser_chunk.len);
-                return false;
+            // todo => change to bitwise concat!!
+            self.parser_gp_buff[self.parser_parsed_bytes] = self.buff[0];
+            self.parser_parsed_bytes += 1;
+
+            if (self.parser_parsed_bytes == 4) {
+                self.parser_chunk.len = @bitCast(u32, self.parser_gp_buff);
+                if (native_endian == .Little) {
+                    self.parser_chunk.len = @byteSwap(u32, self.parser_chunk.len);
+                }
+                self.parser_parsed_bytes = 0;
+                self.parser_chunk_state = ParserInChunkState.ParsingType;
             }
         },
         ParserInChunkState.ParsingType => {
-            self.parser_chunk.chunkType = try std.meta.intToEnum(magicNumbers.ChunkType, @bitCast(u32, self.buff));
-            return false;
+            self.parser_gp_buff[self.parser_parsed_bytes] = self.buff[0];
+            self.parser_parsed_bytes += 1;
+
+            if (self.parser_parsed_bytes == 4) {
+                self.parser_chunk.chunkType = try std.meta.intToEnum(magicNumbers.ChunkType, @bitCast(u32, self.parser_gp_buff));
+                self.parser_chunk_state = ParserInChunkState.ParsingData;
+                self.parser_parsed_bytes = 0;
+            }
         },
         ParserInChunkState.ParsingData => {
-            if (self.parser_chunk.data_appended_size == 0)
+            if (self.parser_parsed_bytes == 0) {
                 self.parser_chunk.data = try self.a.alloc(u8, self.parser_chunk.len);
+            }
 
-            if (self.parser_chunk.data_appended_size <= self.parser_chunk.len) {
-                mem.copy(u8, self.parser_chunk.data[self.parser_chunk.data_appended_size..], &self.buff);
-                self.parser_chunk.data_appended_size += self.buff.len;
+            if (self.parser_parsed_bytes < self.parser_chunk.len) {
+                self.parser_chunk.data[self.parser_parsed_bytes] = self.buff[0];
+                self.parser_parsed_bytes += 1;
             } else {
                 if (native_endian == .Little) {
                     mem.reverse(u8, self.parser_chunk.data);
                 }
-                return true;
+                self.parser_chunk_state = ParserInChunkState.ParsingCrc;
+                self.parser_parsed_bytes = 0;
             }
-
-            return false;
         },
         ParserInChunkState.ParsingCrc => {
-            self.parser_chunk.crc = @bitCast(u32, self.buff);
-            if (native_endian == .Little) {
-                self.parser_chunk.crc = @byteSwap(u32, self.parser_chunk.crc);
-            }
+            self.parser_gp_buff[self.parser_parsed_bytes] = self.buff[0];
+            self.parser_parsed_bytes += 1;
+            if (self.parser_parsed_bytes == 4) {
+                self.parser_chunk.crc = @bitCast(u32, self.parser_gp_buff);
+                if (native_endian == .Little) {
+                    self.parser_chunk.crc = @byteSwap(u32, self.parser_chunk.crc);
+                }
 
-            // todo => fix crc
-            if (std.hash.Crc32.hash(self.parser_chunk.data) != self.parser_chunk.crc) {
-                print("crc does not align!!! \n", .{});
-                // return PngDecoderErr.ChunkCrcErr;
+                // todo => crc broken, fix
+                if (std.hash.Crc32.hash(self.parser_chunk.data) != self.parser_chunk.crc) {
+                    print("crc broken {d} \n", .{std.hash.Crc32.hash(self.parser_chunk.data)});
+                    // return PngDecoderErr.ChunkCrcErr;
+                }
+                self.parser_chunk_state = ParserInChunkState.ParsingLen;
+                self.parser_parsed_bytes = 0;
+                return true;
             }
-            return true;
         },
     }
+    return false;
 }
 
 fn parseHeaderSig(self: *PngDecoder) !bool {
-    mem.copy(u8, self.parser_png_sig[self.parser_png_sig_appended_size..], &self.buff);
-    if (!mem.eql(u8, &self.parser_png_sig, &magicNumbers.pngStreamStart)) {
-        self.parser_png_sig_appended_size = 0;
+    mem.copy(u8, self.parser_png_sig[self.parser_parsed_bytes..], &self.buff);
+    if (mem.eql(u8, &self.parser_png_sig, &magicNumbers.pngStreamStart)) {
+        self.parser_parsed_bytes = 0;
         return true;
-    } else if (self.parser_png_sig_appended_size > 8) {
+    } else if (self.parser_parsed_bytes > 8) {
         return PngDecoderErr.ChunkCrcErr;
     } else {
-        self.parser_png_sig_appended_size += 4;
+        self.parser_parsed_bytes += @truncate(u32, self.buff.len);
         return false;
     }
 }

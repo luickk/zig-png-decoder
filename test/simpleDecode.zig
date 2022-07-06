@@ -12,8 +12,18 @@ pub fn main() !void {
     var in_stream = buf_reader.reader();
 
     var decoder = PngDecoder.init(test_allocator);
+    var lastPS = decoder.parser_state;
+    var lastPCS = decoder.parser_chunk_state;
+    print("init parser state: {}; init in chunk state: {} \n", .{ decoder.parser_state, decoder.parser_chunk_state });
 
-    var buff: [4]u8 = undefined;
-    while ((try in_stream.read(&buff)) != 0)
+    var buff: [1]u8 = undefined;
+    var i: usize = 0;
+    while ((try in_stream.read(&buff)) != 0) {
+        i += buff.len;
         try decoder.parse(buff);
+        if (decoder.parser_state != lastPS or decoder.parser_chunk_state != lastPCS)
+            print("parser state: {}; in chunk state: {} \n", .{ decoder.parser_state, decoder.parser_chunk_state });
+        lastPS = decoder.parser_state;
+        lastPCS = decoder.parser_chunk_state;
+    }
 }
