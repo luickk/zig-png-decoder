@@ -11,16 +11,25 @@ pub fn PngDecoder(comptime ReaderType: type) type {
     return struct {
         const Self = @This();
 
-        const PngDecoderErr = error{ ChunkCrcErr, ChunkHeaderSigErr, ChunkOrderErr };
-
+        const PngDecoderErr = error{ ChunkCrcErr, ChunkHeaderSigErr, ChunkOrderErr, ColorTypeNotSupported, CompressionNotSupported, FilterNotSupported, InterlaceNotSupproted, ChunkTypeNotSupported };
+        const zls_stream_buff_size = 1000;
         const DecodedImg = struct {
             width: u32,
             height: u32,
+            bit_depth: u8,
+            img_size: usize,
+
+            color_type: magicNumbers.ImgColorType,
+            compression_method: u8,
+            filter_method: u8,
+            interlace_method: u8,
+
+            bitmap_buff: ?[]u8,
         };
 
         pub const PngChunk = struct {
             len: u32, // only defines the len of the data field!
-            chunkType: magicNumbers.ChunkType,
+            chunk_type: magicNumbers.ChunkType,
             data: ?[]u8,
             crc: u32,
         };
@@ -29,13 +38,15 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         in_reader: ReaderType,
         parser_chunk: PngChunk,
         img: DecodedImg,
+        zls_stream_buff: std.ArrayList(u8),
 
         pub fn init(a: Allocator, source: ReaderType) Self {
             return Self{
                 .a = a,
                 .in_reader = source,
                 .img = undefined,
-                .parser_chunk = .{ .len = 0, .chunkType = undefined, .data = null, .crc = 0 },
+                .parser_chunk = .{ .len = 0, .chunk_type = undefined, .data = null, .crc = 0 },
+                .zls_stream_buff = std.ArrayList(u8).init(a),
             };
         }
 
@@ -44,41 +55,88 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                 return false;
             while (true) {
                 try self.parseChunk();
-                print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunkType, self.parser_chunk.len, self.parser_chunk.crc });
-                if (self.parser_chunk.chunkType == magicNumbers.ChunkType.ihdr) {}
-                if (self.parser_chunk.chunkType == magicNumbers.ChunkType.idat) {
-                    var in_stream = std.io.fixedBufferStream(self.parser_chunk.data.?);
-                    var zlib_stream = try std.compress.zlib.zlibStream(self.a, in_stream.reader());
-                    defer zlib_stream.deinit();
+                print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.len, self.parser_chunk.crc });
+                switch (self.parser_chunk.chunk_type) {
+                    magicNumbers.ChunkType.ihdr => {
+                        // parses ihdr data and writes it to self.img
+                        try self.parseIHDRData(self.parser_chunk.data.?);
+                        // performing checks on png validity and compatibility with this parser
+                        try self.img.color_type.checkAllowedBitDepths(self.img.bit_depth);
+                        switch (self.img.color_type) {
+                            magicNumbers.ImgColorType.truecolor => {
+                                self.img.img_size = self.img.width * self.img.height * (self.img.bit_depth / 8) * 3;
+                            },
+                            magicNumbers.ImgColorType.truecolor_alpha => {
+                                self.img.img_size = self.img.width * self.img.height * (self.img.bit_depth / 8) * 4;
+                            },
+                            else => {
+                                return PngDecoderErr.ColorTypeNotSupported;
+                            },
+                        }
+                        if (self.img.compression_method != 0)
+                            return PngDecoderErr.CompressionNotSupported;
+                        if (self.img.filter_method != 0)
+                            return PngDecoderErr.FilterNotSupported;
+                        if (self.img.interlace_method != 0)
+                            return PngDecoderErr.InterlaceNotSupproted;
+                        self.a.free(self.parser_chunk.data.?);
+                    },
+                    magicNumbers.ChunkType.srgb => {
+                        self.a.free(self.parser_chunk.data.?);
+                    },
+                    magicNumbers.ChunkType.idat => {
+                        try self.zls_stream_buff.appendSlice(self.parser_chunk.data.?);
+                        self.a.free(self.parser_chunk.data.?);
+                    },
+                    magicNumbers.ChunkType.iend => {
+                        var in_stream = std.io.fixedBufferStream(self.zls_stream_buff.items);
+                        var zlib_stream = try std.compress.zlib.zlibStream(self.a, in_stream.reader());
+                        defer zlib_stream.deinit();
 
-                    const buf = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
-                    defer self.a.free(buf);
-                }
-                if (self.parser_chunk.chunkType == magicNumbers.ChunkType.iend) {
-                    return true;
+                        self.img.bitmap_buff = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
+
+                        return true;
+                    },
                 }
             }
             return false;
         }
+        pub fn deinit(self: *Self) void {
+            if (self.img.bitmap_buff) |*bitmap_buff| {
+                self.a.free(bitmap_buff.*);
+            }
+            self.zls_stream_buff.deinit();
+        }
 
         fn parseChunk(self: *Self) !void {
             self.parser_chunk.len = try self.in_reader.readIntBig(u32);
-            self.parser_chunk.chunkType = try std.meta.intToEnum(magicNumbers.ChunkType, try self.in_reader.readIntLittle(u32));
+            self.parser_chunk.chunk_type = std.meta.intToEnum(magicNumbers.ChunkType, try self.in_reader.readIntNative(u32)) catch {
+                return PngDecoderErr.ChunkTypeNotSupported;
+            };
             self.parser_chunk.data = try self.a.alloc(u8, self.parser_chunk.len);
             try self.in_reader.readNoEof(self.parser_chunk.data.?);
             self.parser_chunk.crc = try self.in_reader.readIntBig(u32);
 
             var crc_hash = std.hash.Crc32.init();
-            crc_hash.update(&@bitCast([4]u8, self.parser_chunk.chunkType));
+            crc_hash.update(&@bitCast([4]u8, self.parser_chunk.chunk_type));
             crc_hash.update(self.parser_chunk.data.?);
 
             if (crc_hash.final() != self.parser_chunk.crc) {
                 return PngDecoderErr.ChunkCrcErr;
             }
         }
+        fn parseIHDRData(self: *Self, data: []u8) !void {
+            self.img.width = mem.readIntBig(u32, data[0..4]);
+            self.img.height = mem.readIntBig(u32, data[4..8]);
+            self.img.bit_depth = mem.readIntBig(u8, data[8..9]);
+            self.img.color_type = try std.meta.intToEnum(magicNumbers.ImgColorType, mem.readIntBig(u8, data[9..10]));
+            self.img.compression_method = mem.readIntBig(u8, data[10..11]);
+            self.img.filter_method = mem.readIntBig(u8, data[11..12]);
+            self.img.interlace_method = mem.readIntBig(u8, data[12..13]);
+        }
 
         fn parseHeaderSig(self: *Self) !bool {
-            if (mem.eql(u8, &(try self.in_reader.readBytesNoEof(8)), &magicNumbers.pngStreamStart)) {
+            if (mem.eql(u8, &(try self.in_reader.readBytesNoEof(8)), &magicNumbers.PngStreamStart)) {
                 return true;
             }
             return false;
