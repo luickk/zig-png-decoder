@@ -11,7 +11,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
     return struct {
         const Self = @This();
 
-        const PngDecoderErr = error{ ChunkCrcErr, ChunkHeaderSigErr, ChunkOrderErr, ColorTypeNotSupported, CompressionNotSupported, FilterNotSupported, InterlaceNotSupproted, ChunkTypeNotSupported };
+        const PngDecoderErr = error{ ChunkCrcErr, ChunkHeaderSigErr, ChunkOrderErr, MissingPngSig, ColorTypeNotSupported, CompressionNotSupported, FilterNotSupported, InterlaceNotSupproted, ChunkTypeNotSupported };
         const zls_stream_buff_size = 1000;
         const DecodedImg = struct {
             width: u32,
@@ -50,9 +50,8 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             };
         }
 
-        pub fn parse(self: *Self) !bool {
-            if (!(try self.parseHeaderSig()))
-                return false;
+        pub fn parse(self: *Self) !void {
+            try self.parseHeaderSig();
             while (true) {
                 try self.parseChunk();
                 print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.len, self.parser_chunk.crc });
@@ -95,11 +94,10 @@ pub fn PngDecoder(comptime ReaderType: type) type {
 
                         self.img.bitmap_buff = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
 
-                        return true;
+                        break;
                     },
                 }
             }
-            return false;
         }
         pub fn deinit(self: *Self) void {
             if (self.img.bitmap_buff) |*bitmap_buff| {
@@ -135,11 +133,9 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             self.img.interlace_method = mem.readIntBig(u8, data[12..13]);
         }
 
-        fn parseHeaderSig(self: *Self) !bool {
-            if (mem.eql(u8, &(try self.in_reader.readBytesNoEof(8)), &magicNumbers.PngStreamStart)) {
-                return true;
-            }
-            return false;
+        fn parseHeaderSig(self: *Self) !void {
+            if (!mem.eql(u8, &(try self.in_reader.readBytesNoEof(8)), &magicNumbers.PngStreamStart))
+                return PngDecoderErr.MissingPngSig;
         }
     };
 }
