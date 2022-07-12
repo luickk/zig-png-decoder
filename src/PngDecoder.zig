@@ -53,8 +53,10 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         pub fn parse(self: *Self) !void {
             try self.parseHeaderSig();
             while (true) {
-                try self.parseChunk();
-                print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.len, self.parser_chunk.crc });
+                // if the chunktype is not found -> ignore
+                // todo => check if it's a critical chunk
+                self.parseChunk() catch |e| if (e == PngDecoderErr.ChunkTypeNotSupported) continue;
+                // print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.len, self.parser_chunk.crc });
                 switch (self.parser_chunk.chunk_type) {
                     magicNumbers.ChunkType.ihdr => {
                         // parses ihdr data and writes it to self.img
@@ -93,7 +95,6 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                         defer zlib_stream.deinit();
 
                         self.img.bitmap_buff = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
-
                         break;
                     },
                 }
@@ -122,6 +123,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             if (crc_hash.final() != self.parser_chunk.crc) {
                 return PngDecoderErr.ChunkCrcErr;
             }
+            print("{} (d)crc: {d} \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.crc });
         }
         fn parseIHDRData(self: *Self, data: []u8) !void {
             self.img.width = mem.readIntBig(u32, data[0..4]);
