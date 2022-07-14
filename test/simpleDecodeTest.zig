@@ -19,5 +19,5 @@ pub fn main() !void {
     var decoder = PngDecoder.PngDecoder(@TypeOf(in_stream)).init(gpa, in_stream);
     defer decoder.deinit();
 
-    try decoder.parse();
+    _ = try decoder.parse();
 }

@@ -12,19 +12,18 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         const Self = @This();
 
         const PngDecoderErr = error{ ChunkCrcErr, ChunkHeaderSigErr, ChunkOrderErr, MissingPngSig, ColorTypeNotSupported, CompressionNotSupported, FilterNotSupported, InterlaceNotSupproted, ChunkTypeNotSupported };
-        const zls_stream_buff_size = 1000;
+
         const DecodedImg = struct {
             width: u32,
             height: u32,
             bit_depth: u8,
             img_size: usize,
+            bitmap_reader: std.io.FixedBufferStream([]u8).Reader,
 
             color_type: magicNumbers.ImgColorType,
             compression_method: u8,
             filter_method: u8,
             interlace_method: u8,
-
-            bitmap_buff: ?[]u8,
         };
 
         pub const PngChunk = struct {
@@ -37,20 +36,21 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         a: Allocator,
         in_reader: ReaderType,
         parser_chunk: PngChunk,
-        img: DecodedImg,
-        zls_stream_buff: std.ArrayList(u8),
+        zlib_stream_buff: std.ArrayList(u8),
+        zlib_decoded: ?[]u8,
 
         pub fn init(a: Allocator, source: ReaderType) Self {
             return Self{
                 .a = a,
                 .in_reader = source,
-                .img = undefined,
                 .parser_chunk = .{ .len = 0, .chunk_type = undefined, .data = null, .crc = 0 },
-                .zls_stream_buff = std.ArrayList(u8).init(a),
+                .zlib_decoded = null,
+                .zlib_stream_buff = std.ArrayList(u8).init(a),
             };
         }
 
-        pub fn parse(self: *Self) !void {
+        pub fn parse(self: *Self) !DecodedImg {
+            var final_img: DecodedImg = undefined;
             try self.parseHeaderSig();
             while (true) {
                 // if the chunktype is not found -> ignore
@@ -59,26 +59,26 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                 // print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.len, self.parser_chunk.crc });
                 switch (self.parser_chunk.chunk_type) {
                     magicNumbers.ChunkType.ihdr => {
-                        // parses ihdr data and writes it to self.img
-                        try self.parseIHDRData(self.parser_chunk.data.?);
+                        // parses ihdr data and writes it to final_img
+                        try parseIHDRData(self.parser_chunk.data.?, &final_img);
                         // performing checks on png validity and compatibility with this parser
-                        try self.img.color_type.checkAllowedBitDepths(self.img.bit_depth);
-                        switch (self.img.color_type) {
+                        try final_img.color_type.checkAllowedBitDepths(final_img.bit_depth);
+                        switch (final_img.color_type) {
                             magicNumbers.ImgColorType.truecolor => {
-                                self.img.img_size = self.img.width * self.img.height * (self.img.bit_depth / 8) * 3;
+                                final_img.img_size = final_img.width * final_img.height * (final_img.bit_depth / 8) * 3;
                             },
                             magicNumbers.ImgColorType.truecolor_alpha => {
-                                self.img.img_size = self.img.width * self.img.height * (self.img.bit_depth / 8) * 4;
+                                final_img.img_size = final_img.width * final_img.height * (final_img.bit_depth / 8) * 4;
                             },
                             else => {
                                 return PngDecoderErr.ColorTypeNotSupported;
                             },
                         }
-                        if (self.img.compression_method != 0)
+                        if (final_img.compression_method != 0)
                             return PngDecoderErr.CompressionNotSupported;
-                        if (self.img.filter_method != 0)
+                        if (final_img.filter_method != 0)
                             return PngDecoderErr.FilterNotSupported;
-                        if (self.img.interlace_method != 0)
+                        if (final_img.interlace_method != 0)
                             return PngDecoderErr.InterlaceNotSupproted;
                         self.a.free(self.parser_chunk.data.?);
                     },
@@ -89,27 +89,28 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                         self.a.free(self.parser_chunk.data.?);
                     },
                     magicNumbers.ChunkType.idat => {
-                        try self.zls_stream_buff.appendSlice(self.parser_chunk.data.?);
+                        try self.zlib_stream_buff.appendSlice(self.parser_chunk.data.?);
                         self.a.free(self.parser_chunk.data.?);
                     },
                     magicNumbers.ChunkType.iend => {
-                        var in_stream = std.io.fixedBufferStream(self.zls_stream_buff.items);
-                        var zlib_stream = try std.compress.zlib.zlibStream(self.a, in_stream.reader());
+                        // todo => optimize; really inefficient...
+                        var zlib_reader = std.io.fixedBufferStream(self.zlib_stream_buff.items).reader();
+                        // not filters or interlacing required...
+                        var zlib_stream = try std.compress.zlib.zlibStream(self.a, zlib_reader);
                         defer zlib_stream.deinit();
 
-                        // not filters or interlacing required...
-                        self.img.bitmap_buff = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
+                        self.zlib_decoded = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
+                        final_img.bitmap_reader = std.io.fixedBufferStream(self.zlib_decoded.?).reader();
 
-                        break;
+                        return final_img;
                     },
                 }
             }
         }
         pub fn deinit(self: *Self) void {
-            if (self.img.bitmap_buff) |*bitmap_buff| {
-                self.a.free(bitmap_buff.*);
-            }
-            self.zls_stream_buff.deinit();
+            if (self.zlib_decoded) |*zlib_dec|
+                self.a.free(zlib_dec.*);
+            self.zlib_stream_buff.deinit();
         }
 
         fn parseChunk(self: *Self) !void {
@@ -131,14 +132,15 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                 return PngDecoderErr.ChunkCrcErr;
             }
         }
-        fn parseIHDRData(self: *Self, data: []u8) !void {
-            self.img.width = mem.readIntBig(u32, data[0..4]);
-            self.img.height = mem.readIntBig(u32, data[4..8]);
-            self.img.bit_depth = mem.readIntBig(u8, data[8..9]);
-            self.img.color_type = try std.meta.intToEnum(magicNumbers.ImgColorType, mem.readIntBig(u8, data[9..10]));
-            self.img.compression_method = mem.readIntBig(u8, data[10..11]);
-            self.img.filter_method = mem.readIntBig(u8, data[11..12]);
-            self.img.interlace_method = mem.readIntBig(u8, data[12..13]);
+        fn parseIHDRData(data: []u8, final_img: *DecodedImg) !void {
+            final_img.width = 100;
+            final_img.width = mem.readIntBig(u32, data[0..4]);
+            final_img.height = mem.readIntBig(u32, data[4..8]);
+            final_img.bit_depth = mem.readIntBig(u8, data[8..9]);
+            final_img.color_type = try std.meta.intToEnum(magicNumbers.ImgColorType, mem.readIntBig(u8, data[9..10]));
+            final_img.compression_method = mem.readIntBig(u8, data[10..11]);
+            final_img.filter_method = mem.readIntBig(u8, data[11..12]);
+            final_img.interlace_method = mem.readIntBig(u8, data[12..13]);
         }
 
         fn parseHeaderSig(self: *Self) !void {
