@@ -15,11 +15,23 @@ pub fn build(b: *std.build.Builder) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&png_dec_tests.step);
 
-    const test_decode = b.addExecutable("test_decode", "test/simpleDecode.zig");
+    const test_decode = b.addExecutable("test_decode", "test/simpleDecodeTest.zig");
     test_decode.addPackagePath("src", "src/main.zig");
     test_decode.setBuildMode(mode);
     test_decode.install();
 
+    const test_encode = b.addExecutable("test_encode", "test/simpleEncodeTest.zig");
+    test_encode.addPackagePath("src", "src/main.zig");
+    test_encode.setBuildMode(mode);
+    test_encode.install();
+
+    const test_encode_decode = b.addExecutable("test_encode_decode", "test/encodeDecodeTest.zig");
+    test_encode_decode.addPackagePath("src", "src/main.zig");
+    test_encode_decode.setBuildMode(mode);
+    test_encode_decode.install();
+
     const itest_step = b.step("itest", "Run library integration tests");
+    itest_step.dependOn(&test_encode.run().step);
     itest_step.dependOn(&test_decode.run().step);
+    itest_step.dependOn(&test_encode_decode.run().step);
 }

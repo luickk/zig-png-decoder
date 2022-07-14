@@ -55,7 +55,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             while (true) {
                 // if the chunktype is not found -> ignore
                 // todo => check if it's a critical chunk
-                self.parseChunk() catch |e| if (e == PngDecoderErr.ChunkTypeNotSupported) continue;
+                try self.parseChunk();
                 // print("chunk type: {}, len: {d}, crc: {d} data:... \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.len, self.parser_chunk.crc });
                 switch (self.parser_chunk.chunk_type) {
                     magicNumbers.ChunkType.ihdr => {
@@ -85,6 +85,9 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                     magicNumbers.ChunkType.srgb => {
                         self.a.free(self.parser_chunk.data.?);
                     },
+                    magicNumbers.ChunkType.eXIf => {
+                        self.a.free(self.parser_chunk.data.?);
+                    },
                     magicNumbers.ChunkType.idat => {
                         try self.zls_stream_buff.appendSlice(self.parser_chunk.data.?);
                         self.a.free(self.parser_chunk.data.?);
@@ -94,7 +97,9 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                         var zlib_stream = try std.compress.zlib.zlibStream(self.a, in_stream.reader());
                         defer zlib_stream.deinit();
 
+                        // not filters or interlacing required...
                         self.img.bitmap_buff = try zlib_stream.reader().readAllAlloc(self.a, std.math.maxInt(usize));
+
                         break;
                     },
                 }
@@ -109,7 +114,9 @@ pub fn PngDecoder(comptime ReaderType: type) type {
 
         fn parseChunk(self: *Self) !void {
             self.parser_chunk.len = try self.in_reader.readIntBig(u32);
-            self.parser_chunk.chunk_type = std.meta.intToEnum(magicNumbers.ChunkType, try self.in_reader.readIntNative(u32)) catch {
+            var s = try self.in_reader.readIntNative(u32);
+            self.parser_chunk.chunk_type = std.meta.intToEnum(magicNumbers.ChunkType, s) catch {
+                // print("{d} \n", .{s});
                 return PngDecoderErr.ChunkTypeNotSupported;
             };
             self.parser_chunk.data = try self.a.alloc(u8, self.parser_chunk.len);
@@ -123,7 +130,6 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             if (crc_hash.final() != self.parser_chunk.crc) {
                 return PngDecoderErr.ChunkCrcErr;
             }
-            print("{} (d)crc: {d} \n", .{ self.parser_chunk.chunk_type, self.parser_chunk.crc });
         }
         fn parseIHDRData(self: *Self, data: []u8) !void {
             self.img.width = mem.readIntBig(u32, data[0..4]);
