@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub fn roundUp(numToRound: usize, multiple: usize) usize {
     if (multiple == 0)
         return numToRound;

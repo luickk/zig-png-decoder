@@ -5,7 +5,7 @@ const PngDecoder = @import("src").PngDecoder;
 const pngEncoder = @import("src").pngEncoder;
 
 pub fn main() !void {
-    var file = try std.fs.cwd().openFile("test/test_imgs/test2.png", .{});
+    var file = try std.fs.cwd().openFile("test/test_imgs/test.png", .{});
     defer file.close();
 
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -19,5 +19,8 @@ pub fn main() !void {
     var decoder = PngDecoder.PngDecoder(@TypeOf(in_stream)).init(gpa, in_stream);
     defer decoder.deinit();
 
-    _ = try decoder.parse();
+    var img = try decoder.parse();
+
+    var bm_buff = try img.bitmap_reader.readAllAlloc(gpa, std.math.maxInt(usize));
+    defer gpa.free(bm_buff);
 }
