@@ -21,6 +21,10 @@ pub fn main() !void {
 
     var img = try decoder.parse();
 
+    // var test_buff: [200]u8 = undefined;
+    // var bm_buff = try img.bitmap_reader.read(&test_buff);
+    // _ = bm_buff;
+
     var bm_buff = try img.bitmap_reader.readAllAlloc(gpa, std.math.maxInt(usize));
     defer gpa.free(bm_buff);
 }

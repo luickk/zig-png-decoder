@@ -6,7 +6,7 @@ The decoder takes a reader and returns the bitmap and decoded meta information.
 Example:
 
 ```zig
-	var file = try std.fs.cwd().openFile("test/test.png", .{});
+    var file = try std.fs.cwd().openFile("test/test.png", .{});
     defer file.close();
 
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};

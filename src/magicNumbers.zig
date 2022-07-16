@@ -8,8 +8,17 @@ pub const ChunkType = enum(u32) {
     idat = @bitCast(u32, [_]u8{ 73, 68, 65, 84 }),
     iend = @bitCast(u32, [_]u8{ 73, 69, 78, 68 }),
     ihdr = @bitCast(u32, [_]u8{ 73, 72, 68, 82 }),
-    srgb = @bitCast(u32, [_]u8{ 115, 82, 71, 66 }),
-    eXIf = @bitCast(u32, [_]u8{ 101, 88, 73, 102 }),
+
+    pub fn isCritical(chunk_type: u32) bool {
+        var b = @bitCast([4]u8, chunk_type);
+        std.debug.print("{b} \n", .{b});
+        std.debug.print("{b} \n", .{chunk_type});
+        std.debug.print("{b} \n", .{chunk_type << 30});
+        // 0000x000 00000000 00000000 00000000
+        if (@truncate(u1, chunk_type << 30) == 0)
+            return true;
+        return false;
+    }
 };
 
 pub const ImgColorType = enum(u8) {
