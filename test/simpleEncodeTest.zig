@@ -16,8 +16,5 @@ pub fn main() !void {
     var test_replic = try std.fs.cwd().createFile("test/test_imgs/res/enc_test_res.png", .{});
     defer test_replic.close();
 
-    var file_content = try pngEncoder.simpleEncodeRgba(gpa, test_img_bm, 50, 50, 8);
-    defer (file_content.deinit());
-
-    try test_replic.writeAll(file_content.items);
+    try pngEncoder.simpleEncodeRgba(gpa, test_replic.writer(), test_img_bm, 50, 50, 8);
 }

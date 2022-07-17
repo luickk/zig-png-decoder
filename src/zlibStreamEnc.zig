@@ -1,12 +1,9 @@
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
 const compressor = @import("compressor/compressor.zig");
 
-// compresses with deflate
-// todo => use proper write and redo in a more clean manner
-pub fn encodeZlibStream(a: Allocator, data: []u8) !std.ArrayList(u8) {
-    var en = std.ArrayList(u8).init(a);
+// compresses with deflate and conforms to rfc 1950 specification
+pub fn encodeZlibStream(a: std.mem.Allocator, writer: anytype, data: []u8) !void {
     var hasher = std.hash.Adler32.init();
 
     // from: https://www.ietf.org/rfc/rfc1950.txt
@@ -51,14 +48,13 @@ pub fn encodeZlibStream(a: Allocator, data: []u8) !std.ArrayList(u8) {
     // setting mod 31 checksum; only write to the first 4 bits...
     zlib_header[1] += 31 - @truncate(u8, ((@as(u16, zlib_header[0]) << 8) + @as(u16, zlib_header[1])) % 31);
 
-    try en.appendSlice(&zlib_header);
-    var comp = try compressor.compressor(a, en.writer(), .{ .level = compressor.Compression.huffman_only });
+    try writer.writeAll(&zlib_header);
+    var comp = try compressor.compressor(a, writer, .{ .level = compressor.Compression.huffman_only });
     _ = try comp.write(data);
     try comp.close();
     comp.deinit();
 
     hasher.update(data);
     // todo => do proper relative to host bs
-    try en.appendSlice(&@bitCast([4]u8, @byteSwap(u32, hasher.final())));
-    return en;
+    try writer.writeIntBig(u32, hasher.final());
 }

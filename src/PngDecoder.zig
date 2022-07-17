@@ -1,11 +1,7 @@
 const std = @import("std");
-const mem = std.mem;
-const Allocator = std.mem.Allocator;
-const native_endian = @import("builtin").target.cpu.arch.endian();
-const print = std.debug.print;
+
 const magicNumbers = @import("magicNumbers.zig");
 const utils = @import("utils.zig");
-const test_allocator = std.testing.allocator;
 
 pub fn PngDecoder(comptime ReaderType: type) type {
     return struct {
@@ -27,24 +23,20 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         };
 
         pub const PngChunk = struct {
-            pub const Error = ReaderType.Error || PngDecoderErr || std.compress.deflate.InflateStream(ReaderType).Error || error{ WrongChecksum, OverreadBuffer };
-            pub const Reader = std.io.Reader(*PngChunk, Error, read);
-
             img_reader: ReaderType,
-            len_read: usize,
             len: u32, // only defines len of the data field!
+            temp_data_hash_buff: [4096]u8,
             chunk_type: ?magicNumbers.ChunkType,
             crc_hasher: std.hash.Crc32,
 
-            pub fn init(img_reader: ReaderType) !PngChunk {
+            pub fn init(img_reader: ReaderType) PngChunk {
                 var chunk = PngChunk{
                     .img_reader = img_reader,
                     .len = 0,
-                    .len_read = 0,
+                    .temp_data_hash_buff = undefined,
                     .chunk_type = null,
                     .crc_hasher = std.hash.Crc32.init(),
                 };
-                try chunk.parseChunkHeader();
                 return chunk;
             }
 
@@ -63,29 +55,36 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                 self.crc_hasher.update(&@bitCast([4]u8, chunk_t));
             }
 
-            // Implements the io.Reader interface
-            pub fn read(self: *PngChunk, buffer: []u8) Error!usize {
-                if (buffer.len == 0)
-                    return 0;
+            fn parseChunkBody(self: *PngChunk, data_writer: anytype) !void {
+                var i: usize = self.len;
 
-                const r = try self.img_reader.read(buffer);
-                self.len_read += r;
-                self.crc_hasher.update(buffer[0..r]);
-                if (self.len_read == self.len) {
-                    const hash = try self.img_reader.readIntBig(u32);
-                    if (hash != self.crc_hasher.final() and self.chunk_type != null)
-                        return error.WrongChecksum;
-                } else if (self.len_read > self.len) {
-                    return error.OverreadBuffer;
+                if (i > self.temp_data_hash_buff.len) {
+                    while (i % self.temp_data_hash_buff.len != 0) : (i -= self.temp_data_hash_buff.len) {
+                        _ = try self.img_reader.readAll(&self.temp_data_hash_buff);
+                        self.crc_hasher.update(&self.temp_data_hash_buff);
+                        try data_writer.writeAll(&self.temp_data_hash_buff);
+                    }
+                    if (i != self.len) {
+                        try self.img_reader.readNoEof(self.temp_data_hash_buff[0..i]);
+                        self.crc_hasher.update(self.temp_data_hash_buff[0..i]);
+                        try data_writer.writeAll(self.temp_data_hash_buff[0..i]);
+                    }
+                } else {
+                    std.debug.print("kg {d} \n", .{i});
+                    _ = try self.img_reader.readAll(self.temp_data_hash_buff[0..i]);
+                    self.crc_hasher.update(self.temp_data_hash_buff[0..i]);
+                    // try data_writer.writeAll(self.temp_data_hash_buff[0..i]);
+                    _ = try data_writer.write("dasdsadasdasd");
                 }
-                return r;
-            }
-            pub fn reader(self: *PngChunk) Reader {
-                return .{ .context = self };
+
+                const hash = try self.img_reader.readIntBig(u32);
+                if (hash != self.crc_hasher.final() and self.chunk_type != null) {
+                    return PngDecoderErr.ChunkCrcErr;
+                }
             }
         };
 
-        a: Allocator,
+        a: std.mem.Allocator,
         in_reader: ReaderType,
         zls_stream_buff_data_appended: usize,
         zlib_stream_decomp: ?std.compress.zlib.ZlibStream(std.io.FixedBufferStream([]u8).Reader),
@@ -93,7 +92,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         zlib_buff_comp: std.ArrayList(u8),
         zlib_buff_comp_data_appended: usize,
 
-        pub fn init(a: Allocator, source: ReaderType) Self {
+        pub fn init(a: std.mem.Allocator, source: ReaderType) Self {
             return Self{
                 .a = a,
                 .in_reader = source,
@@ -108,21 +107,25 @@ pub fn PngDecoder(comptime ReaderType: type) type {
         pub fn parse(self: *Self) !DecodedImg {
             var final_img: DecodedImg = undefined;
             try self.parsePngStreamHeaderSig();
+            var chunk_parser = PngChunk.init(self.in_reader);
             while (true) {
-                // todo => check if it's a critical chunk
-                var current_chunk = try PngChunk.init(self.in_reader);
+                try chunk_parser.parseChunkHeader();
 
-                print("chunk type: {}, len: {d}, crc: .. data:... \n", .{ current_chunk.chunk_type, current_chunk.len });
-                if (current_chunk.chunk_type) |chunk_type| {
+                std.debug.print("chunk type: {}, len: {d}, crc: .. data:... \n", .{ chunk_parser.chunk_type, chunk_parser.len });
+                if (chunk_parser.chunk_type) |chunk_type| {
                     switch (chunk_type) {
                         magicNumbers.ChunkType.ihdr => {
-                            final_img.width = try current_chunk.reader().readIntBig(u32);
-                            final_img.height = try current_chunk.reader().readIntBig(u32);
-                            final_img.bit_depth = try current_chunk.reader().readIntBig(u8);
-                            final_img.color_type = try std.meta.intToEnum(magicNumbers.ImgColorType, try current_chunk.reader().readIntBig(u8));
-                            final_img.compression_method = try current_chunk.reader().readIntBig(u8);
-                            final_img.filter_method = try current_chunk.reader().readIntBig(u8);
-                            final_img.interlace_method = try current_chunk.reader().readIntBig(u8);
+                            var ihdr_data: [13]u8 = undefined;
+                            var ihdr_data_stream = std.io.fixedBufferStream(&ihdr_data);
+                            // _ = try ihdr_data_stream.writer().write("dsadas");
+                            try chunk_parser.parseChunkBody(ihdr_data_stream.writer());
+                            final_img.width = try ihdr_data_stream.reader().readIntBig(u32);
+                            final_img.height = try ihdr_data_stream.reader().readIntBig(u32);
+                            final_img.bit_depth = try ihdr_data_stream.reader().readIntBig(u8);
+                            final_img.color_type = try std.meta.intToEnum(magicNumbers.ImgColorType, try ihdr_data_stream.reader().readIntBig(u8));
+                            final_img.compression_method = try ihdr_data_stream.reader().readIntBig(u8);
+                            final_img.filter_method = try ihdr_data_stream.reader().readIntBig(u8);
+                            final_img.interlace_method = try ihdr_data_stream.reader().readIntBig(u8);
 
                             // performing checks on png validity and compatibility with this parser
                             try final_img.color_type.checkAllowedBitDepths(final_img.bit_depth);
@@ -145,7 +148,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                                 return PngDecoderErr.InterlaceNotSupproted;
                         },
                         magicNumbers.ChunkType.idat => {
-                            try self.pngDataReadNoEofToBuff(&current_chunk);
+                            try chunk_parser.parseChunkBody(self.zlib_buff_comp.writer());
                         },
                         magicNumbers.ChunkType.iend => {
                             self.zlib_stream_comp = std.io.fixedBufferStream(self.zlib_buff_comp.items);
@@ -164,17 +167,8 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             self.zlib_buff_comp.deinit();
         }
 
-        // todo => optimize
-        fn pngDataReadNoEofToBuff(self: *Self, current_chunk: *PngChunk) !void {
-            self.zlib_buff_comp_data_appended += current_chunk.len;
-            try self.zlib_buff_comp.ensureTotalCapacity(self.zlib_buff_comp_data_appended);
-            self.zlib_buff_comp.expandToCapacity();
-            try current_chunk.reader().readNoEof(self.zlib_buff_comp.items[self.zlib_buff_comp_data_appended - current_chunk.len .. self.zlib_buff_comp_data_appended]);
-            self.zlib_buff_comp.shrinkAndFree(self.zlib_buff_comp_data_appended);
-        }
-
         fn parsePngStreamHeaderSig(self: *Self) !void {
-            if (!mem.eql(u8, &(try self.in_reader.readBytesNoEof(8)), &magicNumbers.PngStreamStart))
+            if (!std.mem.eql(u8, &(try self.in_reader.readBytesNoEof(8)), &magicNumbers.PngStreamStart))
                 return PngDecoderErr.MissingPngSig;
         }
     };

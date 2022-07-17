@@ -10,12 +10,7 @@ pub const ChunkType = enum(u32) {
     ihdr = @bitCast(u32, [_]u8{ 73, 72, 68, 82 }),
 
     pub fn isCritical(chunk_type: u32) bool {
-        var b = @bitCast([4]u8, chunk_type);
-        std.debug.print("{b} \n", .{b});
-        std.debug.print("{b} \n", .{chunk_type});
-        std.debug.print("{b} \n", .{chunk_type << 30});
-        // 0000x000 00000000 00000000 00000000
-        if (@truncate(u1, chunk_type << 30) == 0)
+        if (@truncate(u1, @truncate(u8, chunk_type) >> 5) == 0)
             return true;
         return false;
     }
