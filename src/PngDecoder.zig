@@ -57,30 +57,21 @@ pub fn PngDecoder(comptime ReaderType: type) type {
 
             fn parseChunkBody(self: *PngChunk, data_writer: anytype) !void {
                 var i: usize = self.len;
-
-                if (i > self.temp_data_hash_buff.len) {
-                    while (i % self.temp_data_hash_buff.len != 0) : (i -= self.temp_data_hash_buff.len) {
-                        _ = try self.img_reader.readAll(&self.temp_data_hash_buff);
-                        self.crc_hasher.update(&self.temp_data_hash_buff);
-                        try data_writer.writeAll(&self.temp_data_hash_buff);
-                    }
-                    if (i != self.len) {
-                        try self.img_reader.readNoEof(self.temp_data_hash_buff[0..i]);
-                        self.crc_hasher.update(self.temp_data_hash_buff[0..i]);
-                        try data_writer.writeAll(self.temp_data_hash_buff[0..i]);
-                    }
+                while (@intCast(i64, i) - @intCast(i64, self.temp_data_hash_buff.len) >= 0) : (i -= self.temp_data_hash_buff.len) {
+                    _ = try self.img_reader.readAll(&self.temp_data_hash_buff);
+                    self.crc_hasher.update(&self.temp_data_hash_buff);
+                    try data_writer.writeAll(&self.temp_data_hash_buff);
                 } else {
-                    std.debug.print("kg {d} \n", .{i});
                     _ = try self.img_reader.readAll(self.temp_data_hash_buff[0..i]);
                     self.crc_hasher.update(self.temp_data_hash_buff[0..i]);
-                    // try data_writer.writeAll(self.temp_data_hash_buff[0..i]);
-                    _ = try data_writer.write("dasdsadasdasd");
+                    try data_writer.writeAll(self.temp_data_hash_buff[0..i]);
                 }
-
                 const hash = try self.img_reader.readIntBig(u32);
                 if (hash != self.crc_hasher.final() and self.chunk_type != null) {
+                    self.crc_hasher.crc = 0xffffffff;
                     return PngDecoderErr.ChunkCrcErr;
                 }
+                self.crc_hasher.crc = 0xffffffff;
             }
         };
 
@@ -111,14 +102,16 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             while (true) {
                 try chunk_parser.parseChunkHeader();
 
-                std.debug.print("chunk type: {}, len: {d}, crc: .. data:... \n", .{ chunk_parser.chunk_type, chunk_parser.len });
+                if (chunk_parser.chunk_type != null) std.debug.print("chunk type: {}, len: {d}, crc: .. data:... \n", .{ chunk_parser.chunk_type, chunk_parser.len });
                 if (chunk_parser.chunk_type) |chunk_type| {
                     switch (chunk_type) {
                         magicNumbers.ChunkType.ihdr => {
                             var ihdr_data: [13]u8 = undefined;
                             var ihdr_data_stream = std.io.fixedBufferStream(&ihdr_data);
-                            // _ = try ihdr_data_stream.writer().write("dsadas");
+
                             try chunk_parser.parseChunkBody(ihdr_data_stream.writer());
+
+                            ihdr_data_stream.reset();
                             final_img.width = try ihdr_data_stream.reader().readIntBig(u32);
                             final_img.height = try ihdr_data_stream.reader().readIntBig(u32);
                             final_img.bit_depth = try ihdr_data_stream.reader().readIntBig(u8);
