@@ -12,8 +12,16 @@ pub fn build(b: *std.build.Builder) void {
     const png_dec_tests = b.addTest("src/PngDecoder.zig");
     png_dec_tests.setBuildMode(mode);
 
+    const png_enc_tests = b.addTest("src/pngEncoder.zig");
+    png_enc_tests.setBuildMode(mode);
+
+    const zlib_enc_tests = b.addTest("src/zlibStreamEnc.zig");
+    zlib_enc_tests.setBuildMode(mode);
+
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&png_dec_tests.step);
+    test_step.dependOn(&png_enc_tests.step);
+    test_step.dependOn(&zlib_enc_tests.step);
 
     const test_decode = b.addExecutable("test_decode", "test/simpleDecodeTest.zig");
     test_decode.addPackagePath("src", "src/main.zig");

@@ -58,3 +58,14 @@ pub fn encodeZlibStream(a: std.mem.Allocator, writer: anytype, data: []u8) !void
     // todo => do proper relative to host bs
     try writer.writeIntBig(u32, hasher.final());
 }
+
+test "chunk encoder test" {
+    const test_chunk = [_]u8{ 120, 1, 1, 0, 0, 255, 255, 0, 0, 0, 1 };
+
+    var enc_buff: [512]u8 = undefined;
+    var enc_buff_stream = std.io.fixedBufferStream(&enc_buff);
+
+    var empty_bitmap: [0]u8 = undefined;
+    try encodeZlibStream(std.testing.allocator, enc_buff_stream.writer(), &empty_bitmap);
+    try std.testing.expect(std.mem.eql(u8, &test_chunk, enc_buff_stream.buffer[0..test_chunk.len]));
+}

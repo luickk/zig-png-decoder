@@ -37,3 +37,14 @@ fn encodeChunk(writer: anytype, chunk_type: magicNumbers.ChunkType, data: []u8) 
     crc_hash.update(data);
     try writer.writeIntBig(u32, crc_hash.final());
 }
+
+test "chunk encoder test" {
+    const test_chunk = [_]u8{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x08, 0x06, 0x00, 0x00, 0x00, 0xf4, 0x78, 0xd4, 0xfa };
+
+    var enc_buff: [512]u8 = undefined;
+    var enc_buff_stream = std.io.fixedBufferStream(&enc_buff);
+
+    var empty_bitmap: [0]u8 = undefined;
+    try simpleEncodeRgba(std.testing.allocator, enc_buff_stream.writer(), &empty_bitmap, 512, 512, 8);
+    try std.testing.expect(std.mem.eql(u8, &test_chunk, enc_buff_stream.buffer[0..test_chunk.len]));
+}

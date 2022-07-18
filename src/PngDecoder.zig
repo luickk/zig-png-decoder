@@ -167,5 +167,17 @@ pub fn PngDecoder(comptime ReaderType: type) type {
     };
 }
 
-// todo => write tests
-test "chunk decoder test" {}
+test "chunk decoder test" {
+    const test_chunk = [_]u8{ 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x08, 0x06, 0x00, 0x00, 0x00, 0xf4, 0x78, 0xd4, 0xfa };
+    var test_chunk_stream = std.io.fixedBufferStream(&test_chunk);
+    var chunk_decoder = PngDecoder(@TypeOf(test_chunk_stream.reader())).PngChunk.init(test_chunk_stream.reader());
+
+    try chunk_decoder.parseChunkHeader();
+    try std.testing.expect(chunk_decoder.chunk_type == magicNumbers.ChunkType.ihdr);
+    try std.testing.expect(chunk_decoder.len == 13);
+
+    var data: [13]u8 = undefined;
+    var data_stream = std.io.fixedBufferStream(&data);
+    try chunk_decoder.parseChunkBody(data_stream.writer());
+    try std.testing.expect(std.mem.eql(u8, data_stream.buffer, test_chunk[8 .. test_chunk.len - 4]));
+}
