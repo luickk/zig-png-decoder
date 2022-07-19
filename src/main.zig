@@ -3,3 +3,4 @@ const testing = std.testing;
 
 pub const PngDecoder = @import("PngDecoder.zig");
 pub const pngEncoder = @import("pngEncoder.zig");
+pub const magicNumbers = @import("magicNumbers.zig");

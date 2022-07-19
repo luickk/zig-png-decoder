@@ -16,20 +16,18 @@ pub const ChunkType = enum(u32) {
     }
 };
 
-pub const ImgColorType = enum(u8) {
+pub const ColorType = enum(u8) {
     greyscale = 0,
     truecolor = 2,
     index_colored = 3,
     greyscale_alpha = 4,
     truecolor_alpha = 6,
 
-    pub fn checkAllowedBitDepths(self: ImgColorType, bit_depth: u8) !void {
+    pub fn checkAllowedBitDepths(self: ColorType, bit_depth: u8) !void {
         switch (self) {
-            ImgColorType.greyscale => if (bit_depth == 1 or bit_depth == 2 or bit_depth == 4 or bit_depth == 6 or bit_depth == 16) return,
-            ImgColorType.truecolor => if (bit_depth == 8 or bit_depth == 16) return,
-            ImgColorType.index_colored => if (bit_depth == 1 or bit_depth == 2 or bit_depth == 4 or bit_depth == 8) return,
-            ImgColorType.greyscale_alpha => if (bit_depth == 8 or bit_depth == 16) return,
-            ImgColorType.truecolor_alpha => if (bit_depth == 8 or bit_depth == 16) return,
+            ColorType.truecolor => if (bit_depth == 8 or bit_depth == 16) return,
+            ColorType.truecolor_alpha => if (bit_depth == 8 or bit_depth == 16) return,
+            else => {},
         }
         return MagicNumberErr.BitDepthColorTypeMissmatch;
     }

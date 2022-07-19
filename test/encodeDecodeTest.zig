@@ -3,6 +3,7 @@ const print = std.debug.print;
 
 const PngDecoder = @import("src").PngDecoder;
 const pngEncoder = @import("src").pngEncoder;
+const magicNumbers = @import("src").magicNumbers;
 
 pub fn main() !void {
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -27,5 +28,5 @@ pub fn main() !void {
     var test_replic = try std.fs.cwd().createFile("test/test_imgs/res/enc_dec_test_res.png", .{});
     defer test_replic.close();
 
-    try pngEncoder.simpleEncodeRgba(gpa, test_replic.writer(), bm_buff, img.width, img.height, img.bit_depth);
+    try pngEncoder.encodePng(gpa, test_replic.writer(), bm_buff, magicNumbers.ColorType.truecolor_alpha, img.width, img.height, img.bit_depth);
 }

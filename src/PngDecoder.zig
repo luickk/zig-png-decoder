@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const magicNumbers = @import("magicNumbers.zig");
-const utils = @import("utils.zig");
 
 pub fn PngDecoder(comptime ReaderType: type) type {
     return struct {
@@ -16,7 +15,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             img_size: usize,
             bitmap_reader: std.compress.zlib.ZlibStream(std.io.FixedBufferStream([]u8).Reader).Reader,
 
-            color_type: magicNumbers.ImgColorType,
+            color_type: magicNumbers.ColorType,
             compression_method: u8,
             filter_method: u8,
             interlace_method: u8,
@@ -102,7 +101,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
             while (true) {
                 try chunk_parser.parseChunkHeader();
 
-                if (chunk_parser.chunk_type != null) std.debug.print("chunk type: {}, len: {d}, crc: .. data:... \n", .{ chunk_parser.chunk_type, chunk_parser.len });
+                // if (chunk_parser.chunk_type != null) std.debug.print("chunk type: {}, len: {d}, crc: .. data:... \n", .{ chunk_parser.chunk_type, chunk_parser.len });
                 if (chunk_parser.chunk_type) |chunk_type| {
                     switch (chunk_type) {
                         magicNumbers.ChunkType.ihdr => {
@@ -115,7 +114,7 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                             final_img.width = try ihdr_data_stream.reader().readIntBig(u32);
                             final_img.height = try ihdr_data_stream.reader().readIntBig(u32);
                             final_img.bit_depth = try ihdr_data_stream.reader().readIntBig(u8);
-                            final_img.color_type = try std.meta.intToEnum(magicNumbers.ImgColorType, try ihdr_data_stream.reader().readIntBig(u8));
+                            final_img.color_type = try std.meta.intToEnum(magicNumbers.ColorType, try ihdr_data_stream.reader().readIntBig(u8));
                             final_img.compression_method = try ihdr_data_stream.reader().readIntBig(u8);
                             final_img.filter_method = try ihdr_data_stream.reader().readIntBig(u8);
                             final_img.interlace_method = try ihdr_data_stream.reader().readIntBig(u8);
@@ -123,10 +122,10 @@ pub fn PngDecoder(comptime ReaderType: type) type {
                             // performing checks on png validity and compatibility with this parser
                             try final_img.color_type.checkAllowedBitDepths(final_img.bit_depth);
                             switch (final_img.color_type) {
-                                magicNumbers.ImgColorType.truecolor => {
+                                magicNumbers.ColorType.truecolor => {
                                     final_img.img_size = final_img.width * final_img.height * (final_img.bit_depth / 8) * 3;
                                 },
-                                magicNumbers.ImgColorType.truecolor_alpha => {
+                                magicNumbers.ColorType.truecolor_alpha => {
                                     final_img.img_size = final_img.width * final_img.height * (final_img.bit_depth / 8) * 4;
                                 },
                                 else => {

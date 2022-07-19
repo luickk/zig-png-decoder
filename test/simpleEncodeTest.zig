@@ -2,6 +2,7 @@ const std = @import("std");
 const print = std.debug.print;
 
 const pngEncoder = @import("src").pngEncoder;
+const magicNumbers = @import("src").magicNumbers;
 
 const test_bm = @import("test_imgs/test2_bm.zig");
 const test_allocator = std.testing.allocator;
@@ -16,5 +17,5 @@ pub fn main() !void {
     var test_replic = try std.fs.cwd().createFile("test/test_imgs/res/enc_test_res.png", .{});
     defer test_replic.close();
 
-    try pngEncoder.simpleEncodeRgba(gpa, test_replic.writer(), test_img_bm, 50, 50, 8);
+    try pngEncoder.encodePng(gpa, test_replic.writer(), test_img_bm, magicNumbers.ColorType.truecolor_alpha, 50, 50, 8);
 }

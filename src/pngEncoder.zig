@@ -2,7 +2,7 @@ const std = @import("std");
 const magicNumbers = @import("magicNumbers.zig");
 const zlibStreamEnc = @import("zlibStreamEnc.zig");
 
-pub fn simpleEncodeRgba(a: std.mem.Allocator, writer: anytype, bitmap: []u8, width: u32, height: u32, bits_pp: u8) !void {
+pub fn encodePng(a: std.mem.Allocator, writer: anytype, bitmap: []u8, color_type: magicNumbers.ColorType, width: u32, height: u32, bits_pp: u8) !void {
     // header
     try writer.writeAll(&magicNumbers.PngStreamStart);
 
@@ -11,7 +11,7 @@ pub fn simpleEncodeRgba(a: std.mem.Allocator, writer: anytype, bitmap: []u8, wid
     std.mem.writeIntBig(u32, ihdr_data[0..4], width);
     std.mem.writeIntBig(u32, ihdr_data[4..8], height);
     ihdr_data[8] = bits_pp;
-    ihdr_data[9] = @enumToInt(magicNumbers.ImgColorType.truecolor_alpha);
+    ihdr_data[9] = @enumToInt(color_type);
     ihdr_data[10] = 0;
     ihdr_data[11] = 0;
     ihdr_data[12] = 0;
@@ -45,6 +45,6 @@ test "chunk encoder test" {
     var enc_buff_stream = std.io.fixedBufferStream(&enc_buff);
 
     var empty_bitmap: [0]u8 = undefined;
-    try simpleEncodeRgba(std.testing.allocator, enc_buff_stream.writer(), &empty_bitmap, 512, 512, 8);
+    try encodePng(std.testing.allocator, enc_buff_stream.writer(), &empty_bitmap, magicNumbers.ColorType.truecolor_alpha, 512, 512, 8);
     try std.testing.expect(std.mem.eql(u8, &test_chunk, enc_buff_stream.buffer[0..test_chunk.len]));
 }
